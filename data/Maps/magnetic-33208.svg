@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 21.059999 43.12949" xmlns="http://www.w3.org/2000/svg">
+ <g transform="translate(-212.8 -698.74)">
+  <path d="m222.25 737.85v-38.709l-3.9144 13.483 3.4794-3.9144" fill="none" stroke="#000" stroke-width=".8125"/>
+  <text transform="translate(-6.089 29.575)" x="220.07411" y="699.19977" font-family="URW Chancery L" font-size="20" font-style="italic" stroke="#fff" stroke-width="2.5">
+   <tspan x="220.07411" y="699.19977" stroke="#fff" stroke-width="2.5">N</tspan>
+  </text>
+  <text transform="translate(-6.089 29.575)" x="220.07411" y="699.19977" font-family="URW Chancery L" font-size="20" font-style="italic">
+   <tspan x="220.07411" y="699.19977">N</tspan>
+  </text>
+ </g>
+</svg>

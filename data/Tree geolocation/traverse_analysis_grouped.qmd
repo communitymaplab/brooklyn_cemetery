@@ -1,0 +1,565 @@
+---
+title: "Traverse Analysis - Grouped by Name"
+author: "Traverse Calculation Tool"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    embed-resources: true
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+editor: 
+  markdown: 
+    wrap: 72
+editor_options: 
+  chunk_output_type: console
+---
+
+# Overview
+
+This document contains a complete traverse analysis tool that processes
+survey data grouped by the "name" field. Each group is processed
+independently, allowing you to calculate coordinates for multiple
+separate traverse surveys in a single run.
+
+# Input Data Format
+
+Your Google Sheet should have the following columns:
+
+| Column   | Description            | Example          |
+|----------|------------------------|------------------|
+| time     | Timestamp              | 2024-01-15 10:30 |
+| **name** | **Group identifier**   | **Survey_A**     |
+| o_name   | Origin point name      | Point_1          |
+| o_type   | Origin point type      | Corner           |
+| d_name   | Destination point name | Point_2          |
+| d_type   | Destination point type | Stake            |
+| heading  | Azimuth in degrees     | 45.5             |
+| dist_ft  | Distance in feet       | 100              |
+| dist_in  | Distance in inches     | 6                |
+
+::: callout-tip
+### Important Notes
+
+-   **name**: This field groups your traverse calculations. All rows
+    with the same "name" will be processed together as one traverse.
+-   **heading**: Azimuth measured clockwise from North (0°)
+-   **dist_ft & dist_in**: Distance is automatically converted to
+    meters: `(dist_ft + dist_in/12) × 0.3048`
+:::
+
+# Setup and Dependencies
+
+## Required Packages
+
+```{r setup, message=FALSE, warning=FALSE}
+#| label: setup
+#| message: false
+#| warning: false
+
+# Install packages if needed (uncomment to run)
+# install.packages(c("tidyverse", "googlesheets4", "knitr", "kableExtra", "sf", "tmap"))
+
+library(tidyverse)
+library(googlesheets4)
+library(knitr)
+library(kableExtra)
+library(sf)
+library(tmap)
+library(arcgis)
+
+# Deauthenticate for public sheets
+gs4_deauth()
+```
+
+# Function Definitions
+
+## Coordinate Calculation Functions
+
+These functions perform the core traverse calculations using azimuth and
+distance.
+
+```{r functions}
+#| label: calculation-functions
+#| code-fold: false
+
+# Function to calculate END point from START point
+calculate_point_forward <- function(x, y, distance, azimuth) {
+  azimuth_rad <- azimuth * pi / 180
+  tibble(
+    end_x = x + distance * sin(azimuth_rad),
+    end_y = y + distance * cos(azimuth_rad)
+  )
+}
+
+# Function to calculate START point from END point
+calculate_point_backward <- function(x_end, y_end, distance, azimuth) {
+  azimuth_rad <- azimuth * pi / 180
+  tibble(
+    start_x = x_end - distance * sin(azimuth_rad),
+    start_y = y_end - distance * cos(azimuth_rad)
+  )
+}
+```
+
+# Data Loading and Preparation
+
+## Load Data from Google Sheets
+
+```{r load-data}
+#| label: load-data
+#| message: false
+#| warning: false
+
+# Read data from Google Sheet
+# data <- read_sheet(
+#   "https://docs.google.com/spreadsheets/d/1HsUItZaFWvv1XXC5flqRdwNJEtuV8fvr-eNzEuQj0dw/edit?usp=sharing"
+# ) %>%
+#   set_names(c("time","name","o_name","o_type","d_name","d_type",
+#               "heading","dist_ft","dist_in","start_x",
+#               "start_y","end_x","end_y"))
+
+##Practice points
+# Read data from Google Sheet
+data <- read_sheet("https://docs.google.com/spreadsheets/d/1HsUItZaFWvv1XXC5flqRdwNJEtuV8fvr-eNzEuQj0dw/edit?usp=drive_link") %>%
+  set_names(c("time","name","o_name","o_type","d_name","d_type",
+              "heading","dist_ft","dist_in","start_x",
+              "start_y","end_x","end_y"))
+
+# Display first few rows
+kable(head(data), caption = "First 6 rows of input data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+## Load reference data (practice) and convert to meters
+```{r}
+existing_points<-st_read("D:/GoogleDrv/Academic/Teaching-gdrive/Geog4385 6385-CommunityGIS/Community GIS-Data folder/Practice geolocation points_geog courtyard.gpkg") %>%
+  bind_cols(data.frame(o_name=c("P01","P02","P03","P04","P05","P06"))) %>%
+  select(-x,-y) %>%
+  st_transform(32616) %>%
+  bind_cols(st_coordinates(.)) %>%
+  rename(start_x=X,start_y=Y)
+
+```
+
+
+## Data Preprocessing
+
+```{r preprocess}
+#| label: preprocess-data
+
+# Convert distance to total feet and then to meters
+data <- data %>%
+  mutate(
+    distance_ft = dist_ft + (dist_in / 12),
+    # Convert feet to meters for calculations
+    distance_m = distance_ft * 0.3048,
+    # Use heading as azimuth
+    azimuth_deg = heading
+  )
+
+# Ensure 'row' column exists to act as a unique ID
+if (!"row" %in% colnames(data)) {
+  data <- data %>% mutate(row = row_number())
+}
+
+# Rename origin and destination columns to match the calculation logic
+data <- data %>%
+  mutate(
+    Start_Point = o_name,
+    End_Point = d_name
+  ) %>%
+  select(-start_x,-start_y) %>%
+  left_join(existing_points %>%
+              st_set_geometry(NULL)) 
+```
+
+# Main Analysis
+
+```{r main-analysis}
+#| label: main-analysis
+#| message: true
+  
+data_working<-data
+
+  # Filter data for this group
+  
+  # # Initialize coordinate columns if they don't exist
+  # if (!"start_x" %in% colnames(data)) {
+  #   data <- data %>% 
+  #     mutate(start_x = NA_real_, start_y = NA_real_, 
+  #            end_x = NA_real_, end_y = NA_real_)
+  # }
+  
+  # ITERATIVELY CALCULATE ALL POINTS FOR THIS GROUP
+  max_iterations <- 100
+  for (iteration in 1:max_iterations) {
+    data_before <- data_working
+    
+    # Forward calculation--creates end points when start points are known and end points are blank
+    forward <- data_before %>%
+      filter(!is.na(start_x) & !is.na(start_y) & is.na(end_x)) %>%
+      rowwise() %>%
+      mutate(calc = list(calculate_point_forward(start_x, start_y, distance_m, azimuth_deg))) %>%
+      ungroup() %>%
+      select(row, calc) %>% 
+      unnest(calc, ptype = tibble(end_x = double(), end_y = double())) %>%
+      select(row, end_x, end_y) 
+    
+    # # Backward calculation
+    # backward <- data_before %>%
+    #   filter(is.na(start_x) & !is.na(end_x) & !is.na(end_y)) %>%
+    #   rowwise() %>%
+    #   mutate(calc = list(calculate_point_backward(end_x, end_y, distance_m, azimuth_deg))) %>%
+    #   ungroup() %>%
+    #   select(row, calc) %>% 
+    #   unnest(calc, ptype = tibble(start_x = double(), start_y = double())) %>%
+    #   select(row, start_x, start_y) 
+    # 
+    # Update Data-Updates end points from the forward code in the main dataset
+    if (nrow(forward) > 0) {
+      data_working <- data_working %>%
+        left_join(forward, by = "row") %>%
+        mutate(end_x = ifelse(is.na(end_x.x), end_x.y, end_x.x),
+               end_y = ifelse(is.na(end_y.x), end_y.y, end_y.x)) %>%
+        select(-ends_with(".x"), -ends_with(".y"))
+    }
+    
+    # if (nrow(backward) > 0) {
+    #   data_working <- data_working %>%
+    #     left_join(backward, by = "row") %>%
+    #     mutate(start_x = ifelse(is.na(start_x.x), start_x.y, start_x.x),
+    #            start_y = ifelse(is.na(start_y.x), start_y.y, start_y.x)) %>%
+    #     select(-ends_with(".x"), -ends_with(".y"))
+    # }
+    
+    # Propagation--selects all listed coordinates from start and end columns and creates a master list
+    points_list_start <- data_working %>% 
+      filter(!is.na(start_x)) %>% 
+      select(Point_Name = Start_Point, x = start_x, y = start_y)
+    
+    points_list_end <- data_working %>% 
+      filter(!is.na(end_x)) %>% 
+      select(Point_Name = End_Point, x = end_x, y = end_y)
+    
+    all_known_points <- bind_rows(points_list_start, points_list_end) %>%
+      filter(!is.na(Point_Name)) %>% 
+      group_by(Point_Name) %>%
+      summarise(x = first(x), y = first(y), .groups = 'drop') 
+    
+    #Adds new start points to the working dataset
+    data_working <- data_working %>%
+      select(-any_of(c("x", "y"))) %>% 
+      left_join(all_known_points, by = c("Start_Point" = "Point_Name")) %>%
+      mutate(start_x = ifelse(is.na(start_x), x, start_x), 
+             start_y = ifelse(is.na(start_y), y, start_y)) %>%
+      select(-x, -y) 
+    
+    # data_working <- data_working %>%
+    #   select(-any_of(c("x", "y"))) %>% 
+    #   left_join(all_known_points, by = c("End_Point" = "Point_Name")) %>%
+    #   mutate(end_x = ifelse(is.na(end_x), x, end_x), 
+    #          end_y = ifelse(is.na(end_y), y, end_y)) %>%
+    #   select(-x, -y) 
+    
+    # Check for convergence
+    if (isTRUE(all.equal(data_before, data_working))) { 
+      cat(paste("  Converged at iteration", iteration, "/n"))
+      break 
+    }
+  }
+  
+  # Store results for this group
+  all_results <- data_working
+
+```
+
+# Results and Outputs
+
+## Check destination point accuracy
+
+```{r}
+d_points_start<-data_combined %>%
+  select(name, Start_Point, start_x, start_y) %>%
+  rename(point_name=Start_Point,x=start_x,y=start_y) 
+
+d_points_end<-data_combined %>%
+  select(name, End_Point, end_x, end_y) %>%
+  rename(point_name=End_Point,x=end_x,y=end_y) 
+
+d_points<-bind_rows(d_points_start,d_points_end) %>%
+  distinct()
+
+st_write(d_points %>% st_as_sf(coords=c("x","y"),crs=32616),"data/Tree geolocation/dpoints.gpkg",delete_layer=T)
+  
+```
+
+
+## Summary by Group
+
+```{r summary-by-group}
+#| label: summary-by-group
+
+# Create summary for each group
+points_list <- data_combined %>%
+  select(name, row, Start_Point, End_Point, start_x, start_y, end_x, end_y) %>%
+  pivot_longer(
+    cols = c(Start_Point, End_Point),
+    names_to = "point_type",
+    values_to = "Point_Name"
+  ) %>%
+  mutate(
+    x = ifelse(point_type == "Start_Point", start_x, end_x),
+    y = ifelse(point_type == "Start_Point", start_y, end_y)
+  ) #%>%
+  select(name, Point_Name, x, y) %>%
+  filter(!is.na(Point_Name) & !is.na(x)) 
+
+point_summary_by_group<-poins_list %>%
+  group_by(name, Point_Name) %>%
+  summarise(
+    x = mean(x, na.rm = TRUE), 
+    y = mean(y, na.rm = TRUE), 
+    .groups = 'drop'
+  ) %>%
+  arrange(name, Point_Name)
+
+st_write(points_list %>% 
+           st_as_sf(coords=c("x","y"),crs=32616,remove=F),
+         "data/Tree geolocation/courtyard_points_raw.gpkg")
+
+```
+
+# Visualizations
+
+## Point Locations by Group
+
+```{r plot-by-group, fig.width=10, fig.height=8}
+#| label: plot-by-group
+#| fig-width: 10
+#| fig-height: 8
+#| warning: false
+
+ggplot(points_summary_by_group, aes(x = x, y = y, color = name)) +
+  geom_point(size = 3) +
+  geom_text(aes(label = Point_Name), 
+            vjust = -0.8, 
+            hjust = 0.5, 
+            size = 3,
+            check_overlap = TRUE) +
+  facet_wrap(~name, scales = "free") +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Calculated Point Locations by Group",
+    x = "X Coordinate (m)",
+    y = "Y Coordinate (m)",
+    color = "Group"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.position = "bottom",
+    panel.border = element_rect(color = "grey70", fill = NA)
+  ) +
+  coord_fixed()
+```
+
+## All Groups Combined
+
+```{r plot-combined, fig.width=10, fig.height=6}
+#| label: plot-combined
+#| fig-width: 10
+#| fig-height: 6
+#| warning: false
+
+ggplot(points_summary_by_group, aes(x = x, y = y, color = name, shape = name)) +
+  geom_point(size = 4) +
+  geom_text(aes(label = Point_Name), 
+            vjust = -0.8, 
+            hjust = 0.5, 
+            size = 2.5,
+            show.legend = FALSE,
+            check_overlap = TRUE) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "All Groups on Single Plot",
+    x = "X Coordinate (m)",
+    y = "Y Coordinate (m)",
+    color = "Group",
+    shape = "Group"
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.position = "right",
+    panel.grid.major = element_line(color = "grey90"),
+    panel.border = element_rect(color = "grey70", fill = NA)
+  ) +
+  coord_fixed()
+```
+
+# Export Results
+
+```{r export}
+#| label: export-results
+#| eval: false
+
+# Save grouped summary
+write_csv(points_summary_by_group, "points_summary_by_group.csv")
+
+# Save overall summary
+write_csv(points_summary_overall, "points_summary_overall.csv")
+
+# Save detailed results with all calculations
+write_csv(data_combined, "detailed_results_by_group.csv")
+
+cat("Files created:/n")
+cat("  - points_summary_by_group.csv (coordinates grouped by name)/n")
+cat("  - points_summary_overall.csv (overall summary across groups)/n")
+cat("  - detailed_results_by_group.csv (full calculation details)/n")
+```
+
+
+# Spatial Analysis
+
+## Convert to Spatial Features
+
+This section converts the calculated points to a spatial format (sf) and
+visualizes them using tmap in the UTM Zone 16N coordinate system
+(EPSG:32616).
+
+```{r spatial-setup}
+#| label: spatial-setup
+#| message: false
+#| warning: false
+
+# Load additional spatial packages
+library(sf)
+library(tmap)
+
+# Set tmap mode
+tmap_mode("plot")  # Use "view" for interactive maps
+```
+
+## Create SF Objects
+
+### Points by Group
+
+```{r sf-by-group}
+#| label: create-sf-by-group
+
+# Convert points_summary_by_group to sf object
+points_sf_by_group <- points_summary_by_group %>%
+  st_as_sf(coords = c("x", "y"), crs = 32616, remove = FALSE)
+
+st_write(points_sf_by_group,"data/Tree geolocation/practicepoints.gpkg")
+# Display spatial information
+cat("Spatial object created:/n")
+cat("  CRS:", st_crs(points_sf_by_group)$input, "/n")
+cat("  Features:", nrow(points_sf_by_group), "/n")
+cat("  Groups:", n_distinct(points_sf_by_group$name), "/n")
+
+# Show first few features
+kable(head(st_drop_geometry(points_sf_by_group)), 
+      digits = 2,
+      caption = "First 6 spatial features (geometry column hidden)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Overall Points
+
+```{r sf-overall}
+#| label: create-sf-overall
+
+# Convert overall summary to sf object
+points_sf_overall <- points_summary_overall %>%
+  st_as_sf(coords = c("x", "y"), crs = 32616, remove = FALSE)
+
+cat("/nOverall spatial object:/n")
+cat("  Features:", nrow(points_sf_overall), "/n")
+cat("  Bounds:/n")
+print(st_bbox(points_sf_overall))
+
+```
+
+## Interactive Maps with tmap
+
+### Map 1: All Groups on Single Map
+
+```{r tmap-all-groups, fig.width=10, fig.height=8}
+#| label: tmap-all-groups
+#| fig-width: 10
+#| fig-height: 8
+#| warning: false
+
+# Create map with all groups
+tm_shape(points_sf_by_group) +
+  tm_dots(
+    col = "name",
+    size = 0.3,
+    palette = "Set2",
+    title = "Survey Group",
+    border.col = "black",
+    border.lwd = 1
+  ) +
+  tm_text(
+    text = "Point_Name",
+    size = 0.6,
+    auto.placement = TRUE,
+    remove.overlap = TRUE
+  ) +
+  tm_layout(
+    title = "Traverse Points - All Groups (UTM 16N)",
+    legend.outside = TRUE,
+    legend.outside.position = "right",
+    frame = TRUE
+  ) +
+  tm_scale_bar(
+    position = c("left", "bottom"),
+    text.size = 0.6
+  ) +
+  tm_compass(
+    position = c("right", "top"),
+    size = 2
+  ) +
+  tm_grid(
+    alpha = 0.2,
+    labels.size = 0.5
+  )
+```
+
+### Map 2: Interactive Map (Optional)
+
+```{r tmap-interactive}
+#| label: tmap-interactive
+#| eval: false
+
+# Switch to interactive mode for web-based exploration
+tmap_mode("view")
+
+# Create interactive map
+tm_shape(points_sf_by_group) +
+  tm_dots(
+    col = "name",
+    size = 0.1,
+    palette = "Set2",
+    title = "Survey Group",
+    popup.vars = c("Point Name" = "Point_Name", 
+                   "Group" = "name",
+                   "X (UTM)" = "x", 
+                   "Y (UTM)" = "y"),
+    id = "Point_Name"
+  ) +
+  tm_basemap(server = "OpenStreetMap") +
+  tm_layout(
+    title = "Interactive Traverse Points Map"
+  )
+
+# Reset to plot mode
+tmap_mode("plot")
+```

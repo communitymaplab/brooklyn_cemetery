@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unit Converter & Compass Tool</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 28px;
+        }
+
+        .tool-section {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 25px;
+        }
+
+        .tool-section h2 {
+            color: #667eea;
+            font-size: 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+        }
+
+        .tool-section h2::before {
+            content: "📐";
+            margin-right: 10px;
+        }
+
+        .tool-section:last-child h2::before {
+            content: "🧭";
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            color: #555;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .inline-inputs {
+            display: flex;
+            gap: 15px;
+        }
+
+        .inline-inputs .input-group {
+            flex: 1;
+        }
+
+        .result {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-size: 18px;
+            text-align: center;
+            font-weight: 500;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .compass-visual {
+            width: 200px;
+            height: 200px;
+            margin: 20px auto;
+            position: relative;
+            border: 3px solid #667eea;
+            border-radius: 50%;
+            background: white;
+        }
+
+        .compass-arrow {
+            position: absolute;
+            width: 4px;
+            height: 90px;
+            background: linear-gradient(to bottom, #ff4444 0%, #ff4444 50%, #333 50%, #333 100%);
+            top: 50%;
+            left: 50%;
+            transform-origin: center 50%;
+            transform: translate(-50%, -50%) rotate(0deg);
+            transition: transform 0.5s ease;
+        }
+
+        .compass-center {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background: #667eea;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+
+        .compass-label {
+            position: absolute;
+            font-weight: bold;
+            font-size: 14px;
+            color: #333;
+        }
+
+        .compass-label.n { top: 10px; left: 50%; transform: translateX(-50%); }
+        .compass-label.e { right: 10px; top: 50%; transform: translateY(-50%); }
+        .compass-label.s { bottom: 10px; left: 50%; transform: translateX(-50%); }
+        .compass-label.w { left: 10px; top: 50%; transform: translateY(-50%); }
+
+        .hint {
+            font-size: 13px;
+            color: #777;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Unit Converter & Compass Tool</h1>
+        
+        <div class="tool-section">
+            <h2>Feet & Inches to Meters</h2>
+            <div class="inline-inputs">
+                <div class="input-group">
+                    <label for="feet">Feet</label>
+                    <input type="number" id="feet" value="0" min="0" step="1">
+                </div>
+                <div class="input-group">
+                    <label for="inches">Inches</label>
+                    <input type="number" id="inches" value="0" min="0" step="0.1">
+                </div>
+            </div>
+            <div class="result" id="lengthResult">Enter values above</div>
+        </div>
+
+        <div class="tool-section">
+            <h2>Compass Angle from East</h2>
+            <div class="input-group">
+                <label for="heading">Compass Heading (0-360°)</label>
+                <input type="number" id="heading" value="90" min="0" max="360" step="0.1">
+                <div class="hint">Enter degrees from North (0° = N, 90° = E, 180° = S, 270° = W)</div>
+            </div>
+            <div class="compass-visual">
+                <div class="compass-label n">N</div>
+                <div class="compass-label e">E</div>
+                <div class="compass-label s">S</div>
+                <div class="compass-label w">W</div>
+                <div class="compass-arrow" id="compassArrow"></div>
+                <div class="compass-center"></div>
+            </div>
+            <div class="result" id="angleResult">0° from East</div>
+        </div>
+    </div>
+
+    <script>
+        const feetInput = document.getElementById('feet');
+        const inchesInput = document.getElementById('inches');
+        const lengthResult = document.getElementById('lengthResult');
+        const headingInput = document.getElementById('heading');
+        const angleResult = document.getElementById('angleResult');
+        const compassArrow = document.getElementById('compassArrow');
+
+        function convertToMeters() {
+            const feet = parseFloat(feetInput.value) || 0;
+            const inches = parseFloat(inchesInput.value) || 0;
+            
+            const totalInches = (feet * 12) + inches;
+            const meters = totalInches * 0.0254;
+            
+            lengthResult.textContent = `${meters.toFixed(3)} meters`;
+        }
+
+        function calculateAngleFromEast() {
+            let compassHeading = parseFloat(headingInput.value) || 0;
+            
+            // Normalize to 0-360 range
+            compassHeading = compassHeading % 360;
+            if (compassHeading < 0) compassHeading += 360;
+            
+            // East is 90° in compass bearings (measured clockwise from North)
+            // To get angle from East counter-clockwise:
+            // We need to convert from compass (CW from N) to math convention (CCW from E)
+            let angleFromEast;
+            if (compassHeading <= 90) {
+                angleFromEast = 90 - compassHeading;
+            } else {
+                angleFromEast = 450 - compassHeading;
+            }
+            
+            // Get cardinal direction
+            let direction = '';
+            if (compassHeading >= 337.5 || compassHeading < 22.5) direction = 'N';
+            else if (compassHeading >= 22.5 && compassHeading < 67.5) direction = 'NE';
+            else if (compassHeading >= 67.5 && compassHeading < 112.5) direction = 'E';
+            else if (compassHeading >= 112.5 && compassHeading < 157.5) direction = 'SE';
+            else if (compassHeading >= 157.5 && compassHeading < 202.5) direction = 'S';
+            else if (compassHeading >= 202.5 && compassHeading < 247.5) direction = 'SW';
+            else if (compassHeading >= 247.5 && compassHeading < 292.5) direction = 'W';
+            else if (compassHeading >= 292.5 && compassHeading < 337.5) direction = 'NW';
+            
+            angleResult.textContent = `${angleFromEast.toFixed(1)}° from East CCW (${compassHeading.toFixed(1)}° ${direction})`;
+            
+            // Rotate compass arrow (compass bearings are clockwise from North)
+            compassArrow.style.transform = `translate(-50%, -50%) rotate(${compassHeading}deg)`;
+        }
+
+        feetInput.addEventListener('input', convertToMeters);
+        inchesInput.addEventListener('input', convertToMeters);
+        headingInput.addEventListener('input', calculateAngleFromEast);
+
+        // Initialize
+        convertToMeters();
+        calculateAngleFromEast();
+    </script>
+</body>
+</html>

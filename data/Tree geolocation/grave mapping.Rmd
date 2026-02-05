@@ -1,0 +1,56 @@
+---
+title: "Brooklyn Cemetery mapping"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sf) 
+library(tmap)
+
+tmap_mode("view")
+```
+
+# Mapping gravesites at Brooklyn Cemetery
+
+Here's a map showing the location of Brooklyn Cemetery.
+
+```{r}
+bounds<-st_read("data/brooklyn_sections.gpkg")
+
+tm_basemap("OpenStreetMap")+
+tm_shape(bounds)+
+  tm_polygons(alpha=0.6)
+```
+
+Here is the same map with gravesites added.
+
+```{r}
+graves<-readxl::read_xlsx("data/brooklyn_graves_current.xlsx") %>%
+  filter(is.na(x)==F) %>%
+  st_as_sf(coords=c("x","y"),crs=4326)
+
+tm_basemap("OpenStreetMap")+
+tm_shape(bounds)+
+  tm_polygons(alpha=0.7,hover=FALSE)+
+tm_shape(graves)+
+  tm_dots(popup.vars=c("First name"="first_name",
+                       "Middle name"="middle_name",
+                       "Last name"="last_name"),
+          id="last_name")
+```
+
+## Showing tables
+Here's the start of that table:
+
+```{r}
+DT::datatable(graves)
+```
+

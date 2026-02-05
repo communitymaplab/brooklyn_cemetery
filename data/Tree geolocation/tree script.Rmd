@@ -1,0 +1,102 @@
+---
+title: "Cemetery trees"
+output: html_document
+date: "2025-10-31"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(googlesheets4)
+library(sf)
+
+data<-read_sheet("https://docs.google.com/spreadsheets/d/12j85I59vPPfEu3TFYQTNhvsBPkmz34i71xFuHSTXlsc/edit?usp=sharing",sheet=2)
+
+```
+
+##Claude script
+###Create function to calculate the point
+
+```{r}
+# Function to calculate new point from distance and azimuth
+calculate_point <- function(x, y, distance, azimuth) {
+  # azimuth in degrees (0° = North, 90° = East, clockwise)
+  azimuth_rad <- azimuth * pi / 180
+  
+  # Calculate new coordinates (UTM: x = easting, y = northing)
+  tibble(
+    x = x + distance * sin(azimuth_rad),
+    y = y + distance * cos(azimuth_rad)
+  )
+}
+```
+
+###Calculate the new points
+```{r}
+# Iterate until all points are calculated
+max_iterations <- 100
+for (iteration in 1:max_iterations) {
+  data_before <- data
+  
+  # Forward calculation: start point known -> calculate end point
+  forward <- data_before %>%
+    filter(!is.na(start_x), is.na(end_x)) %>%
+   rowwise() %>%
+    mutate(calc = list(calculate_point(start_x, start_y, Distance_m, Azimuth_deg))) %>%
+    ungroup() %>%
+    unnest(calc) %>%
+    mutate(end_x=x,end_y=y) %>%
+    select(-x,-y) %>%
+    distinct()
+
+#Create updated dataset with calculated endpoints
+data_update1<-data %>%
+  anti_join(forward,by="row") %>% 
+  bind_rows(forward)
+
+#Take the new end points and set them up as start points
+data_endpoints<-data_update1 %>%
+  select(End_Point,end_x,end_y) %>%
+  rename(Start_Point=End_Point,
+         start_x=end_x,
+         start_y=end_y) %>%
+  filter(is.na(start_x)==F)
+
+#Merge the new endpoints as start points
+data_start_points<-data_update1 %>%
+  filter(is.na(start_x)) %>%
+  select(-start_x,-start_y) %>%
+  left_join(data_endpoints)
+
+#Merge the new startpoints to update the dataset
+data<-data_update1 %>%
+  anti_join(data_start_points,by="row") %>%
+  bind_rows(data_start_points)
+  
+  # Stop if no changes were made
+  if (nrow(data %>% filter(is.na(end_x)))==0) {
+    break
+  }
+}
+```
+
+#Average coordinates
+
+```{r}
+points<-data %>%
+  select(End_Point,end_x,end_y) %>%
+  rename(Start_Point=End_Point,
+         start_x=end_x,
+         start_y=end_y) %>%
+  bind_rows(data %>% 
+              select(Start_Point,start_x,start_y)) %>%
+  group_by(Start_Point) %>%
+  summarise(x=mean(start_x),
+            y=mean(start_y))
+
+write_csv(points,"data/test_treepoints.csv")
+```
+
